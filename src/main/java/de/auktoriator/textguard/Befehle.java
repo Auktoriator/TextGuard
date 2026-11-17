@@ -3,6 +3,7 @@ package de.auktoriator.textguard;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.ArgumentBuilder;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
@@ -12,8 +13,10 @@ import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
 import io.papermc.paper.command.brigadier.argument.resolvers.BlockPositionResolver;
 import io.papermc.paper.command.brigadier.argument.resolvers.PlayerProfileListResolver;
+import io.papermc.paper.command.brigadier.argument.resolvers.selector.EntitySelectorArgumentResolver;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -22,9 +25,11 @@ import java.util.function.ToIntBiFunction;
 import java.util.stream.Collectors;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.block.Block;
 import org.bukkit.block.Sign;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.persistence.PersistentDataHolder;
 
@@ -62,10 +67,14 @@ final class Befehle {
         }
         var markieren = Commands.literal("kennzeichen")
                 .then(Commands.literal("hinzufuegen")
-                        .then(mitZiel(kennzeichenArg(null), (c, z) -> markieren(c, z, true))))
+                        .then(mitZiel(kennzeichenArg(null), (c, z) -> z == null ? 0 : markieren(c, List.of(z), true))
+                                .then(entitiesZiel(true))))
                 .then(Commands.literal("entfernen")
-                        .then(mitZiel(kennzeichenArg(null), (c, z) -> markieren(c, z, false))))
-                .then(mitZiel(Commands.literal("zeigen"), this::kennzeichenZeigen));
+                        .then(mitZiel(kennzeichenArg(null), (c, z) -> z == null ? 0 : markieren(c, List.of(z), false))
+                                .then(entitiesZiel(false))))
+                .then(mitZiel(Commands.literal("zeigen"), this::kennzeichenZeigen)
+                        .then(Commands.literal("entity").then(Commands.argument("selektor", ArgumentTypes.entity())
+                                .executes(c -> kennzeichenZeigen(c, entity(c))))));
         return Commands.literal("textguard")
                 .requires(q -> Sichten.istAdmin(q.getSender(), sichten.ops()))
                 .then(Commands.literal("gruppe")
@@ -132,6 +141,11 @@ final class Befehle {
         return knoten.executes(c -> befehl.applyAsInt(c, automatisch(c)))
                 .then(Commands.literal("schild").then(Commands.argument("position", ArgumentTypes.blockPosition())
                         .executes(c -> befehl.applyAsInt(c, schild(c, schildAn(c))))));
+    }
+
+    private LiteralArgumentBuilder<CommandSourceStack> entitiesZiel(boolean hinzufuegen) {
+        return Commands.literal("entities").then(Commands.argument("selektor", ArgumentTypes.entities())
+                .executes(c -> markierenEntities(c, hinzufuegen)));
     }
 
     // Befehle
@@ -245,20 +259,56 @@ final class Befehle {
         return Command.SINGLE_SUCCESS;
     }
 
-    private int markieren(CommandContext<CommandSourceStack> c, Ziel ziel, boolean hinzufuegen) {
-        if (ziel == null) {
-            return 0;
+    private int markierenEntities(CommandContext<CommandSourceStack> c, boolean hinzufuegen)
+            throws CommandSyntaxException {
+        var gefunden = c.getArgument("selektor", EntitySelectorArgumentResolver.class).resolve(c.getSource());
+        var ziele = gefunden.stream().filter(e -> !(e instanceof Player)).map(this::entityZiel).toList();
+        if (gefunden.size() > ziele.size()) {
+            info(c, (gefunden.size() - ziele.size()) + " Spieler übersprungen.");
         }
+        if (ziele.isEmpty()) {
+            return fehler(c, "Keine passende Entity gefunden.");
+        }
+        return markieren(c, ziele, hinzufuegen);
+    }
+
+    /** Fehler und Erfolg getrennt: Bei vielen Zielen eine Zusammenfassung statt einer Zeile je Ziel. */
+    private int markieren(CommandContext<CommandSourceStack> c, List<Ziel> ziele, boolean hinzufuegen) {
         var name = c.getArgument("kennzeichen", String.class);
         if (hinzufuegen && !Regelwerk.gueltigerName(name)) {
             return fehler(c, "Ungültiges Kennzeichen. Erlaubt sind a-z, 0-9, _ und -, höchstens 32 Zeichen.");
         }
+        var erledigt = new ArrayList<Ziel>();
+        var fehler = new ArrayList<String>();
+        for (var ziel : ziele) {
+            var problem = aendern(ziel, name, hinzufuegen);
+            if (problem == null) {
+                erledigt.add(ziel);
+            } else {
+                fehler.add(problem);
+            }
+        }
+        if (erledigt.isEmpty()) {
+            return fehler(c, fehler.get(0) + (fehler.size() > 1 ? " (und " + (fehler.size() - 1) + " weitere)" : ""));
+        }
+        c.getSource().getSender().sendMessage(Component.text(
+                "Kennzeichen „" + name + "“ " + (hinzufuegen ? "hinzugefügt: " : "entfernt: ")
+                        + (erledigt.size() == 1 ? erledigt.get(0).name() : erledigt.size() + " Entities"),
+                NamedTextColor.GREEN));
+        if (!fehler.isEmpty()) {
+            info(c, fehler.size() + " ohne Änderung, z. B. " + fehler.get(0));
+        }
+        return Command.SINGLE_SUCCESS;
+    }
+
+    /** Ändert das Kennzeichen eines Ziels. Gibt den Grund zurück, wenn nichts geändert wurde, sonst null. */
+    private static String aendern(Ziel ziel, String name, boolean hinzufuegen) {
         var vorher = Kennzeichen.lesen(ziel.halter());
         if (vorher == null) {
-            return fehler(c, ziel.name() + ": Die gespeicherten Kennzeichen sind beschädigt, nichts geändert.");
+            return ziel.name() + ": Die gespeicherten Kennzeichen sind beschädigt, nichts geändert.";
         }
         if (vorher.contains(name) == hinzufuegen) {
-            return fehler(c, ziel.name() + " hat „" + name + "“ " + (hinzufuegen ? "schon." : "nicht."));
+            return ziel.name() + " hat „" + name + "“ " + (hinzufuegen ? "schon." : "nicht.");
         }
         var neu = new TreeSet<>(vorher);
         if (hinzufuegen) {
@@ -268,10 +318,7 @@ final class Befehle {
         }
         Kennzeichen.schreiben(ziel.halter(), new ArrayList<>(neu));
         ziel.speichern().run();
-        c.getSource().getSender().sendMessage(Component.text(
-                "Kennzeichen „" + name + "“ " + (hinzufuegen ? "hinzugefügt: " : "entfernt: ") + ziel.name(),
-                NamedTextColor.GREEN));
-        return Command.SINGLE_SUCCESS;
+        return null;
     }
 
     private int kennzeichenZeigen(CommandContext<CommandSourceStack> c, Ziel ziel) {
@@ -292,15 +339,19 @@ final class Befehle {
 
     // Ziele
 
-    /** Ohne Angabe: angeschautes Schild. Buch in der Haupthand und angeschaute Entity kommen später davor. */
+    /** Ohne Angabe: angeschaute Entity (keine Spieler), sonst angeschautes Schild. Das Buch in der Haupthand kommt davor. */
     private Ziel automatisch(CommandContext<CommandSourceStack> c) {
         if (!(c.getSource().getSender() instanceof Player spieler)) {
-            fehler(c, "Von der Konsole bitte ein Ziel angeben, z. B. „schild <x y z>“.");
+            fehler(c, "Von der Konsole bitte ein Ziel angeben: „schild <x y z>“, „entities <selektor>“ oder „entity <selektor>“.");
             return null;
+        }
+        var entity = spieler.getTargetEntity(6);
+        if (entity != null && !(entity instanceof Player)) {
+            return entityZiel(entity);
         }
         var block = spieler.getTargetBlockExact(6);
         if (block == null) {
-            fehler(c, "Du schaust auf kein Schild (höchstens 6 Blöcke entfernt).");
+            fehler(c, "Du schaust auf keine Entity und kein Schild (höchstens 6 Blöcke entfernt).");
             return null;
         }
         return schild(c, block);
@@ -309,6 +360,25 @@ final class Befehle {
     private static Block schildAn(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
         var pos = c.getArgument("position", BlockPositionResolver.class).resolve(c.getSource());
         return c.getSource().getLocation().getWorld().getBlockAt(pos.blockX(), pos.blockY(), pos.blockZ());
+    }
+
+    private Ziel entity(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        var gefunden = c.getArgument("selektor", EntitySelectorArgumentResolver.class).resolve(c.getSource());
+        if (gefunden.isEmpty() || gefunden.get(0) instanceof Player) {
+            fehler(c, "Keine passende Entity gefunden (Spieler haben keine Mob-Namen).");
+            return null;
+        }
+        return entityZiel(gefunden.get(0));
+    }
+
+    private Ziel entityZiel(Entity entity) {
+        var name = entity.customName();
+        var beschreibung = entity.getType().key().value() + (name == null ? ""
+                : " „" + PlainTextComponentSerializer.plainText().serialize(name) + "“");
+        return new Ziel(Art.MOBNAMEN, beschreibung, entity, () -> {
+            kennzeichen.entityNachlesen(entity);
+            kennzeichen.nameSenden(entity);
+        });
     }
 
     private Ziel schild(CommandContext<CommandSourceStack> c, Block block) {

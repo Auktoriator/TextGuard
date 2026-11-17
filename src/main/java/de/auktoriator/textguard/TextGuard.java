@@ -50,6 +50,7 @@ public final class TextGuard extends JavaPlugin implements Listener {
         getServer().getWorlds().forEach(welt -> List.of(welt.getLoadedChunks()).forEach(kennzeichen::durchsehen));
         getServer().getPluginManager().registerEvents(this, this);
         getServer().getPluginManager().registerEvents(kennzeichen, this);
+        kennzeichen.entitiesDurchsehen();
         getServer().getPluginManager().registerEvents(new Schutz(sichten, kennzeichen), this);
         getServer().getScheduler().runTaskTimer(this, kennzeichen::unbekannteDurchsehen, 1, 1);
         var befehle = new Befehle(this, sichten, auffrischen, kennzeichen);

@@ -32,7 +32,8 @@ public final class Auffrischen {
     public void spieler(Player spieler) {
         adminAbgleichen(spieler);
         kennzeichen.nachsenden(spieler);
-        // Hier ergänzen spätere Schritte das Nachsenden von Entities und Inventar.
+        kennzeichen.namenNachsenden(spieler);
+        // Hier ergänzt ein späterer Schritt das Nachsenden von Inventar und Büchern.
     }
 
     public void entfernen(UUID spieler) {

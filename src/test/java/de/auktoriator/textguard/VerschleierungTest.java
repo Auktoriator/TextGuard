@@ -2,13 +2,18 @@ package de.auktoriator.textguard;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.github.retrooper.packetevents.protocol.entity.data.EntityData;
 import com.github.retrooper.packetevents.protocol.nbt.NBT;
 import com.github.retrooper.packetevents.protocol.nbt.NBTByte;
 import com.github.retrooper.packetevents.protocol.nbt.NBTCompound;
 import com.github.retrooper.packetevents.protocol.nbt.NBTList;
 import com.github.retrooper.packetevents.protocol.nbt.NBTString;
 import com.github.retrooper.packetevents.protocol.nbt.NBTType;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.gson.GsonComponentSerializer;
 import org.junit.jupiter.api.Test;
 
 class VerschleierungTest {
@@ -83,6 +88,47 @@ class VerschleierungTest {
             assertEquals(alt.getTagOrNull("color"), neu.getTagOrNull("color"));
             assertEquals(alt.getTagOrNull("has_glowing_text"), neu.getTagOrNull("has_glowing_text"));
         }
+    }
+
+    // Der Typ bleibt null: Die Typ-Tabelle von PacketEvents braucht eine laufende PacketEvents-Instanz.
+    @Test
+    void mobnameWirdZuRunenGleicherLaenge() {
+        var daten = new ArrayList<EntityData<?>>(List.of(
+                new EntityData<>(0, null, (byte) 1),
+                new EntityData<>(2, null, Optional.of(Component.text("Bert der Geheime"))),
+                new EntityData<>(3, null, true)));
+
+        assertTrue(v.mobname(daten));
+
+        assertEquals(Optional.of(Component.text(v.runen("Bert der Geheime"))), daten.get(1).getValue());
+        assertEquals((byte) 1, daten.get(0).getValue());
+        assertEquals(true, daten.get(2).getValue());
+    }
+
+    @Test
+    void mobnameAlsJsonBleibtJson() {
+        var json = GsonComponentSerializer.gson().serialize(Component.text("Bert"));
+        var daten = new ArrayList<EntityData<?>>(List.of(
+                new EntityData<>(2, null, Optional.of(json))));
+
+        assertTrue(v.mobname(daten));
+
+        assertEquals(Optional.of(GsonComponentSerializer.gson().serialize(Component.text(v.runen("Bert")))),
+                daten.get(0).getValue());
+    }
+
+    @Test
+    void mobnameLeerOderFehlendBleibt() {
+        var leer = new ArrayList<EntityData<?>>(List.of(
+                new EntityData<>(2, null, Optional.empty())));
+        assertFalse(v.mobname(leer));
+        assertEquals(Optional.empty(), leer.get(0).getValue());
+
+        var leererText = new ArrayList<EntityData<?>>(List.of(
+                new EntityData<>(2, null, Optional.of(Component.empty()))));
+        assertFalse(v.mobname(leererText));
+
+        assertFalse(v.mobname(new ArrayList<>(List.of(new EntityData<>(0, null, (byte) 1)))));
     }
 
     @Test
