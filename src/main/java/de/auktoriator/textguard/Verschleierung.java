@@ -1,5 +1,6 @@
 package de.auktoriator.textguard;
 
+import com.github.retrooper.packetevents.protocol.entity.data.EntityData;
 import com.github.retrooper.packetevents.protocol.nbt.NBT;
 import com.github.retrooper.packetevents.protocol.nbt.NBTCompound;
 import com.github.retrooper.packetevents.protocol.nbt.NBTList;
@@ -9,16 +10,21 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.SplittableRandom;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.gson.GsonComponentSerializer;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 
 /** Macht Texte unlesbar. Rein (kein Bukkit, nur das Server-Geheimnis), deshalb auch in Netty-Threads nutzbar. */
 public final class Verschleierung {
 
     private static final int ERSTE_RUNE = 0x16A0;
     private static final int RUNEN = 0x16EA - ERSTE_RUNE + 1;
+    private static final int INDEX_MOBNAME = 2;
     private static final List<String> SEITEN = List.of("front_text", "back_text");
     private static final List<String> ZEILEN = List.of("messages", "filtered_messages");
     // "" ist der Schlüssel, unter dem gemischte NBT-Listen einzelne Strings einpacken.
@@ -71,6 +77,32 @@ public final class Verschleierung {
                 }
             }
         }
+    }
+
+    /**
+     * Ersetzt in den Metadaten einer Entity den Custom Name (Index 2) durch Runen. Leerer oder fehlender Name und alle
+     * anderen Einträge bleiben. true, wenn etwas geändert wurde. Je nach Typ liegt der Name als Component oder als
+     * JSON-String vor.
+     */
+    @SuppressWarnings("unchecked")
+    public boolean mobname(List<EntityData<?>> daten) {
+        var geaendert = false;
+        for (var eintrag : daten) {
+            if (eintrag.getIndex() != INDEX_MOBNAME || !(eintrag.getValue() instanceof Optional<?> name)
+                    || name.isEmpty()) {
+                continue;
+            }
+            var json = name.get() instanceof String;
+            var klartext = PlainTextComponentSerializer.plainText().serialize(json
+                    ? GsonComponentSerializer.gson().deserialize((String) name.get()) : (Component) name.get());
+            if (klartext.isEmpty()) {
+                continue;
+            }
+            var runen = Component.text(runen(klartext));
+            ((EntityData<Object>) eintrag).setValue(Optional.of(json ? GsonComponentSerializer.gson().serialize(runen) : runen));
+            geaendert = true;
+        }
+        return geaendert;
     }
 
     /** Ungefährer Klartext einer Textkomponente im NBT-Format: alle Textinhalte aneinandergehängt. */

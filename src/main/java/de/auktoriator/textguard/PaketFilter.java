@@ -6,6 +6,7 @@ import com.github.retrooper.packetevents.protocol.nbt.NBTCompound;
 import com.github.retrooper.packetevents.protocol.packettype.PacketType;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerBlockEntityData;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerChunkData;
+import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityMetadata;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
@@ -37,6 +38,10 @@ final class PaketFilter extends PacketListenerAbstract {
     @Override
     public void onPacketSend(PacketSendEvent event) {
         var typ = event.getPacketType();
+        if (typ == PacketType.Play.Server.ENTITY_METADATA) {
+            mobname(event);
+            return;
+        }
         if (typ != PacketType.Play.Server.CHUNK_DATA && typ != PacketType.Play.Server.BLOCK_ENTITY_DATA) {
             return;
         }
@@ -69,6 +74,27 @@ final class PaketFilter extends PacketListenerAbstract {
             // Ungeprüft weiterschicken könnte Text verraten.
             event.setCancelled(true);
             logger.log(Level.WARNING, "Paket " + typ + " nicht prüfbar, verworfen", e);
+        }
+    }
+
+    private void mobname(PacketSendEvent event) {
+        var uuid = event.getUser().getUUID();
+        var sicht = uuid == null ? null : sichten.sicht(uuid);
+        if (sicht != null && sicht.allesLesbar(Art.MOBNAMEN)) {
+            return;
+        }
+        try {
+            var paket = new WrapperPlayServerEntityMetadata(event);
+            if (kennzeichen.istSpieler(paket.getEntityId())
+                    || sicht != null && kennzeichen.mobnameLesbar(sicht, paket.getEntityId())) {
+                return;
+            }
+            if (verschleierung.mobname(paket.getEntityMetadata())) {
+                event.markForReEncode(true);
+            }
+        } catch (RuntimeException e) {
+            event.setCancelled(true);
+            logger.log(Level.WARNING, "Entity-Metadaten nicht prüfbar, verworfen", e);
         }
     }
 

@@ -1,6 +1,13 @@
 package de.auktoriator.textguard;
 
+import com.destroystokyo.paper.event.entity.EntityAddToWorldEvent;
+import com.destroystokyo.paper.event.entity.EntityRemoveFromWorldEvent;
+import com.github.retrooper.packetevents.PacketEvents;
+import com.github.retrooper.packetevents.protocol.entity.data.EntityData;
+import com.github.retrooper.packetevents.protocol.entity.data.EntityDataTypes;
 import com.github.retrooper.packetevents.util.Vector3i;
+import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityMetadata;
+import java.util.Optional;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -16,12 +23,14 @@ import org.bukkit.Tag;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.Sign;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.world.ChunkUnloadEvent;
 import org.bukkit.persistence.PersistentDataHolder;
@@ -29,8 +38,9 @@ import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
 
 /**
- * Kennzeichen an Schildern. Sie stehen im PDC des Schilds. Paper schickt das PDC nicht an den Client, und der
- * Paketlauscher darf nicht auf die Welt zugreifen, deshalb gibt es einen Zwischenspeicher pro geladenem Chunk.
+ * Kennzeichen an Schildern und Entities. Sie stehen im PDC. Paper schickt das PDC nicht an den Client, und der
+ * Paketlauscher darf nicht auf die Welt zugreifen, deshalb gibt es Zwischenspeicher: pro geladenem Chunk für Schilder,
+ * pro Entity-ID für Entities mit Kennzeichen.
  */
 final class Kennzeichen implements Listener {
 
@@ -45,6 +55,12 @@ final class Kennzeichen implements Listener {
     /** Chunks, in denen der Lauscher ein unbekanntes Schild verschleiert hat: durchsehen und nachsenden. */
     private final Set<ChunkOrt> unbekannt = ConcurrentHashMap.newKeySet();
     private final Map<UUID, UUID> welten = new ConcurrentHashMap<>();
+    /** Marker für ein beschädigtes Kennzeichen-PDC. Wird per Identität verglichen, der Inhalt trifft nie eine Ausnahme. */
+    private static final Set<String> DEFEKT = Set.of("!defekt");
+    /** Nur Entities mit Kennzeichen. Was fehlt, hat keine (auch Fake-Entities anderer Plugins). */
+    private final Map<Integer, Set<String>> entities = new ConcurrentHashMap<>();
+    /** Entity-IDs von Spielern: Ihre Metadaten fasst der Lauscher nie an. */
+    private final Set<Integer> spielerIds = ConcurrentHashMap.newKeySet();
 
     Kennzeichen(Plugin plugin) {
         this.plugin = plugin;
@@ -68,7 +84,70 @@ final class Kennzeichen implements Listener {
         return kennzeichen;
     }
 
+    /** Netty-sicher. */
+    boolean istSpieler(int entityId) {
+        return spielerIds.contains(entityId);
+    }
+
+    /** Netty-sicher. Darf die Sicht den Namen der Entity lesen? Unbekannte IDs haben keine Kennzeichen. */
+    boolean mobnameLesbar(Sicht sicht, int entityId) {
+        var kz = entities.get(entityId);
+        return kz != DEFEKT && sicht.darfLesen(Art.MOBNAMEN, kz == null ? Set.of() : kz);
+    }
+
     // Alles Weitere nur im Hauptthread.
+
+    /** Liest die Kennzeichen der Entity neu in den Zwischenspeicher. */
+    void entityNachlesen(Entity entity) {
+        if (entity instanceof Player) {
+            spielerIds.add(entity.getEntityId());
+            return;
+        }
+        var kz = lesen(entity);
+        if (kz == null) {
+            plugin.getLogger().warning("Kennzeichen an " + entity.getType().key().value() + " " + entity.getUniqueId()
+                    + " nicht lesbar, der Name bleibt für alle mit Einschränkungen verschleiert.");
+        }
+        entityEintragen(entity.getEntityId(), kz);
+    }
+
+    /** kz null: beschädigt, dann gesperrt. Leer: kein Eintrag. */
+    void entityEintragen(int entityId, Set<String> kz) {
+        if (kz == null) {
+            entities.put(entityId, DEFEKT);
+        } else if (kz.isEmpty()) {
+            entities.remove(entityId);
+        } else {
+            entities.put(entityId, kz);
+        }
+    }
+
+    /** Schickt den echten Namen an alle, die die Entity verfolgen. Der Lauscher verschleiert passend. */
+    void nameSenden(Entity entity) {
+        entity.getTrackedBy().forEach(spieler -> nameSenden(spieler, entity));
+    }
+
+    private static void nameSenden(Player spieler, Entity entity) {
+        var name = entity.customName();
+        if (name != null) {
+            // Nicht silent: Das Paket muss durch den Lauscher.
+            PacketEvents.getAPI().getPlayerManager().getUser(spieler).sendPacket(new WrapperPlayServerEntityMetadata(
+                    entity.getEntityId(), List.of(new EntityData<>(2, EntityDataTypes.OPTIONAL_ADV_COMPONENT,
+                            Optional.of(name)))));
+        }
+    }
+
+    /** Schickt dem Spieler die Namen aller benannten Entities, die er verfolgt. */
+    void namenNachsenden(Player spieler) {
+        spieler.getWorld().getEntities().stream()
+                .filter(e -> !(e instanceof Player) && e.customName() != null && e.getTrackedBy().contains(spieler))
+                .forEach(e -> nameSenden(spieler, e));
+    }
+
+    /** Beim Pluginstart: Entities, die schon geladen sind. */
+    void entitiesDurchsehen() {
+        Bukkit.getWorlds().forEach(welt -> welt.getEntities().forEach(this::entityNachlesen));
+    }
 
     /** null, wenn der Eintrag kaputt ist. Das Objekt gilt dann als gesperrt. */
     static Set<String> lesen(PersistentDataHolder halter) {
@@ -168,6 +247,23 @@ final class Kennzeichen implements Listener {
                     .filter(spieler -> spieler.isChunkSent(ort.chunk()))
                     .forEach(spieler -> nachsenden(spieler, welt, ort));
         }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void beimHinzufuegen(EntityAddToWorldEvent event) {
+        entityNachlesen(event.getEntity());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void beimEntfernen(EntityRemoveFromWorldEvent event) {
+        if (!(event.getEntity() instanceof Player)) {
+            entities.remove(event.getEntity().getEntityId());
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void beimVerlassen(PlayerQuitEvent event) {
+        spielerIds.remove(event.getPlayer().getEntityId());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
