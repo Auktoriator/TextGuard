@@ -14,6 +14,7 @@ import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
 import io.papermc.paper.command.brigadier.argument.resolvers.BlockPositionResolver;
 import io.papermc.paper.command.brigadier.argument.resolvers.PlayerProfileListResolver;
 import io.papermc.paper.command.brigadier.argument.resolvers.selector.EntitySelectorArgumentResolver;
+import io.papermc.paper.persistence.PersistentDataContainerView;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -21,23 +22,24 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.function.ToIntBiFunction;
 import java.util.stream.Collectors;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
+import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.block.Sign;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
-import org.bukkit.persistence.PersistentDataHolder;
 
 /** Brigadier-Baum für /textguard (Alias /tg). */
 final class Befehle {
 
-    /** Objekt, dessen Kennzeichen ein Befehl liest oder ändert. speichern übernimmt Änderungen am PDC. */
-    private record Ziel(Art art, String name, PersistentDataHolder halter, Runnable speichern) {
+    /** Objekt, dessen Kennzeichen ein Befehl liest oder ändert. schreiben speichert neue Kennzeichen und sendet nach. */
+    private record Ziel(Art art, String name, PersistentDataContainerView pdc, Consumer<List<String>> schreiben) {
     }
 
     private final TextGuard plugin;
@@ -303,7 +305,7 @@ final class Befehle {
 
     /** Ändert das Kennzeichen eines Ziels. Gibt den Grund zurück, wenn nichts geändert wurde, sonst null. */
     private static String aendern(Ziel ziel, String name, boolean hinzufuegen) {
-        var vorher = Kennzeichen.lesen(ziel.halter());
+        var vorher = Kennzeichen.lesen(ziel.pdc());
         if (vorher == null) {
             return ziel.name() + ": Die gespeicherten Kennzeichen sind beschädigt, nichts geändert.";
         }
@@ -316,8 +318,7 @@ final class Befehle {
         } else {
             neu.remove(name);
         }
-        Kennzeichen.schreiben(ziel.halter(), new ArrayList<>(neu));
-        ziel.speichern().run();
+        ziel.schreiben().accept(new ArrayList<>(neu));
         return null;
     }
 
@@ -325,7 +326,7 @@ final class Befehle {
         if (ziel == null) {
             return 0;
         }
-        var kz = Kennzeichen.lesen(ziel.halter());
+        var kz = Kennzeichen.lesen(ziel.pdc());
         if (kz == null) {
             return fehler(c, ziel.name() + ": Die gespeicherten Kennzeichen sind beschädigt.");
         }
@@ -345,13 +346,17 @@ final class Befehle {
             fehler(c, "Von der Konsole bitte ein Ziel angeben: „schild <x y z>“, „entities <selektor>“ oder „entity <selektor>“.");
             return null;
         }
+        var buch = buch(spieler);
+        if (buch != null) {
+            return buch;
+        }
         var entity = spieler.getTargetEntity(6);
         if (entity != null && !(entity instanceof Player)) {
             return entityZiel(entity);
         }
         var block = spieler.getTargetBlockExact(6);
         if (block == null) {
-            fehler(c, "Du schaust auf keine Entity und kein Schild (höchstens 6 Blöcke entfernt).");
+            fehler(c, "Du hältst kein Buch und schaust auf keine Entity und kein Schild (höchstens 6 Blöcke entfernt).");
             return null;
         }
         return schild(c, block);
@@ -375,7 +380,8 @@ final class Befehle {
         var name = entity.customName();
         var beschreibung = entity.getType().key().value() + (name == null ? ""
                 : " „" + PlainTextComponentSerializer.plainText().serialize(name) + "“");
-        return new Ziel(Art.MOBNAMEN, beschreibung, entity, () -> {
+        return new Ziel(Art.MOBNAMEN, beschreibung, entity.getPersistentDataContainer(), kz -> {
+            Kennzeichen.schreiben(entity.getPersistentDataContainer(), kz);
             kennzeichen.entityNachlesen(entity);
             kennzeichen.nameSenden(entity);
         });
@@ -389,9 +395,26 @@ final class Befehle {
         }
         // update() schreibt die Kopie zurück und schickt das Schild am Tickende an alle, die den Chunk haben.
         // Der Zwischenspeicher muss vorher stimmen.
-        return new Ziel(Art.SCHILDER, "Schild bei " + ort, schild, () -> {
+        var pdc = schild.getPersistentDataContainer();
+        return new Ziel(Art.SCHILDER, "Schild bei " + ort, pdc, kz -> {
+            Kennzeichen.schreiben(pdc, kz);
             schild.update();
             kennzeichen.nachlesen(block);
+        });
+    }
+
+    /** Signiertes Buch oder Buch und Feder in der Haupthand, sonst null. */
+    private static Ziel buch(Player spieler) {
+        // Ein Spiegel: Änderungen landen direkt im Inventar.
+        var item = spieler.getInventory().getItemInMainHand();
+        if (item.getType() != Material.WRITTEN_BOOK && item.getType() != Material.WRITABLE_BOOK) {
+            return null;
+        }
+        var name = "Buch „" + PlainTextComponentSerializer.plainText().serialize(item.effectiveName()) + "“ in der Hand";
+        // Direkt ins custom_data statt über editMeta: BookMeta kennt keine gefilterten Seiten und würde sie verlieren.
+        return new Ziel(Art.BUECHER, name, item.getPersistentDataContainer(), kz -> {
+            item.editPersistentDataContainer(pdc -> Kennzeichen.schreiben(pdc, kz));
+            spieler.updateInventory();
         });
     }
 

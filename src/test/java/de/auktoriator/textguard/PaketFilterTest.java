@@ -28,6 +28,16 @@ class PaketFilterTest {
     }
 
     @Test
+    void findetBuchtextBeiderBuchArten() {
+        for (var inhalt : java.util.List.of("\0\12minecraft:written_book_content\1", "\3writable_book_content")) {
+            assertTrue(PaketFilter.enthaelt(Unpooled.copiedBuffer(inhalt, StandardCharsets.ISO_8859_1),
+                    PaketFilter.BUCHTEXT), inhalt);
+        }
+        assertFalse(PaketFilter.enthaelt(Unpooled.copiedBuffer("book_conten", StandardCharsets.ISO_8859_1),
+                PaketFilter.BUCHTEXT));
+    }
+
+    @Test
     void beachtetLeseposition() {
         var puffer = Unpooled.copiedBuffer("front_text\0\0", StandardCharsets.ISO_8859_1);
         puffer.readerIndex(1);

@@ -30,7 +30,7 @@ public final class TextGuard extends JavaPlugin implements Listener {
         ops = new OpStufe(Path.of("ops.json"));
         sichten = new Sichten(ops);
         kennzeichen = new Kennzeichen(this);
-        auffrischen = new Auffrischen(sichten, kennzeichen);
+        auffrischen = new Auffrischen(this, sichten, kennzeichen);
         byte[] geheimnis;
         try {
             ops.neuLesen();
@@ -51,7 +51,7 @@ public final class TextGuard extends JavaPlugin implements Listener {
         getServer().getPluginManager().registerEvents(this, this);
         getServer().getPluginManager().registerEvents(kennzeichen, this);
         kennzeichen.entitiesDurchsehen();
-        getServer().getPluginManager().registerEvents(new Schutz(sichten, kennzeichen), this);
+        getServer().getPluginManager().registerEvents(new Schutz(this, sichten, kennzeichen), this);
         getServer().getScheduler().runTaskTimer(this, kennzeichen::unbekannteDurchsehen, 1, 1);
         var befehle = new Befehle(this, sichten, auffrischen, kennzeichen);
         getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS,
@@ -122,5 +122,6 @@ public final class TextGuard extends JavaPlugin implements Listener {
         sichten.entfernen(event.getPlayer().getUniqueId());
         auffrischen.entfernen(event.getPlayer().getUniqueId());
         kennzeichen.entfernen(event.getPlayer().getUniqueId());
+        paketFilter.vergessen(event.getPlayer().getUniqueId());
     }
 }
