@@ -16,6 +16,8 @@ dependencies {
     compileOnly("com.github.retrooper:packetevents-spigot:2.14.0")
     testImplementation("io.papermc.paper:paper-api:26.3.build.253-stable")
     testImplementation("com.github.retrooper:packetevents-spigot:2.14.0")
+    // Zur Laufzeit bringt Paper Netty mit, PacketEvents gibt es nur zum Kompilieren weiter.
+    testRuntimeOnly("io.netty:netty-buffer:4.1.72.Final")
     testImplementation(platform("org.junit:junit-bom:5.13.4"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")

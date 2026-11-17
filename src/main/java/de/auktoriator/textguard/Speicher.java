@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.SecureRandom;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -12,7 +13,7 @@ import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 
-/** Liest und schreibt gruppen.yml. */
+/** Liest und schreibt gruppen.yml und das Geheimnis für die Runen. */
 public final class Speicher {
 
     private final Path datei;
@@ -84,6 +85,28 @@ public final class Speicher {
             }
         }
         return new Gruppe(name, mitglieder, regeln);
+    }
+
+    /**
+     * 32 zufällige Bytes, beim ersten Aufruf angelegt. Temp-Dateien sind unter Linux und macOS nur für den Besitzer
+     * lesbar (600), das Umbenennen behält das bei.
+     */
+    public static byte[] geheimnis(Path datei) throws IOException {
+        if (Files.exists(datei) && Files.size(datei) == 32) {
+            return Files.readAllBytes(datei);
+        }
+        var neu = new byte[32];
+        new SecureRandom().nextBytes(neu);
+        var ordner = datei.toAbsolutePath().getParent();
+        Files.createDirectories(ordner);
+        var temp = Files.createTempFile(ordner, "geheimnis", ".tmp");
+        try {
+            Files.write(temp, neu);
+            Files.move(temp, datei, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(temp);
+        }
+        return neu;
     }
 
     /** Atomar: erst in eine Temp-Datei, dann umbenennen, damit nie eine halbe Datei liegt. */

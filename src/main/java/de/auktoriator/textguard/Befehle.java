@@ -2,6 +2,7 @@ package de.auktoriator.textguard;
 
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.ArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
@@ -9,29 +10,41 @@ import com.mojang.brigadier.tree.LiteralCommandNode;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
+import io.papermc.paper.command.brigadier.argument.resolvers.BlockPositionResolver;
 import io.papermc.paper.command.brigadier.argument.resolvers.PlayerProfileListResolver;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.function.ToIntBiFunction;
 import java.util.stream.Collectors;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Bukkit;
+import org.bukkit.block.Block;
+import org.bukkit.block.Sign;
 import org.bukkit.entity.Player;
+import org.bukkit.persistence.PersistentDataHolder;
 
 /** Brigadier-Baum für /textguard (Alias /tg). */
 final class Befehle {
 
+    /** Objekt, dessen Kennzeichen ein Befehl liest oder ändert. speichern übernimmt Änderungen am PDC. */
+    private record Ziel(Art art, String name, PersistentDataHolder halter, Runnable speichern) {
+    }
+
     private final TextGuard plugin;
     private final Sichten sichten;
     private final Auffrischen auffrischen;
+    private final Kennzeichen kennzeichen;
 
-    Befehle(TextGuard plugin, Sichten sichten, Auffrischen auffrischen) {
+    Befehle(TextGuard plugin, Sichten sichten, Auffrischen auffrischen, Kennzeichen kennzeichen) {
         this.plugin = plugin;
         this.sichten = sichten;
         this.auffrischen = auffrischen;
+        this.kennzeichen = kennzeichen;
     }
 
     LiteralCommandNode<CommandSourceStack> baum() {
@@ -42,11 +55,17 @@ final class Befehle {
                     .then(Commands.literal("alle").executes(c -> grundsatz(c, art, true)))
                     .then(Commands.literal("keine").executes(c -> grundsatz(c, art, false)))
                     .then(Commands.literal("ausnahme")
-                            .then(Commands.literal("hinzufuegen").then(kennzeichenArg(art, false)
+                            .then(Commands.literal("hinzufuegen").then(kennzeichenArg(null)
                                     .executes(c -> ausnahme(c, art, true))))
-                            .then(Commands.literal("entfernen").then(kennzeichenArg(art, true)
+                            .then(Commands.literal("entfernen").then(kennzeichenArg(art)
                                     .executes(c -> ausnahme(c, art, false))))));
         }
+        var markieren = Commands.literal("kennzeichen")
+                .then(Commands.literal("hinzufuegen")
+                        .then(mitZiel(kennzeichenArg(null), (c, z) -> markieren(c, z, true))))
+                .then(Commands.literal("entfernen")
+                        .then(mitZiel(kennzeichenArg(null), (c, z) -> markieren(c, z, false))))
+                .then(mitZiel(Commands.literal("zeigen"), this::kennzeichenZeigen));
         return Commands.literal("textguard")
                 .requires(q -> Sichten.istAdmin(q.getSender(), sichten.ops()))
                 .then(Commands.literal("gruppe")
@@ -60,6 +79,7 @@ final class Befehle {
                         .then(Commands.literal("entfernen").then(gruppeArg().then(spielerArg()
                                 .executes(c -> mitglied(c, false))))))
                 .then(regel.then(gruppeArg))
+                .then(markieren)
                 .then(Commands.literal("ansicht")
                         .then(Commands.literal("aus").executes(c -> ansicht(c, null)))
                         .then(gruppeArg().executes(c -> ansicht(c, gruppenName(c)))))
@@ -84,12 +104,12 @@ final class Befehle {
         });
     }
 
-    /** Beim Entfernen nur die Ausnahmen der Regel, beim Hinzufügen alle bekannten Kennzeichen. */
-    private RequiredArgumentBuilder<CommandSourceStack, String> kennzeichenArg(Art art, boolean nurDieserGruppe) {
+    /** Mit Art nur die Ausnahmen dieser Regel der Gruppe im Befehl, sonst alle Kennzeichen aus den Regeln. */
+    private RequiredArgumentBuilder<CommandSourceStack, String> kennzeichenArg(Art art) {
         return Commands.argument("kennzeichen", StringArgumentType.word()).suggests((c, b) -> {
             var gruppen = sichten.regelwerk().gruppen();
             var vorschlaege = new TreeSet<String>();
-            if (nurDieserGruppe) {
+            if (art != null) {
                 var gruppe = gruppen.get(c.getArgument("gruppe", String.class));
                 if (gruppe != null) {
                     vorschlaege.addAll(gruppe.regel(art).ausnahmen());
@@ -104,6 +124,14 @@ final class Befehle {
 
     private RequiredArgumentBuilder<CommandSourceStack, PlayerProfileListResolver> spielerArg() {
         return Commands.argument("spieler", ArgumentTypes.playerProfiles());
+    }
+
+    /** Ohne weitere Angabe das Ziel automatisch, sonst „schild <position>“ (auch von der Konsole). */
+    private <T extends ArgumentBuilder<CommandSourceStack, T>> T mitZiel(
+            T knoten, ToIntBiFunction<CommandContext<CommandSourceStack>, Ziel> befehl) {
+        return knoten.executes(c -> befehl.applyAsInt(c, automatisch(c)))
+                .then(Commands.literal("schild").then(Commands.argument("position", ArgumentTypes.blockPosition())
+                        .executes(c -> befehl.applyAsInt(c, schild(c, schildAn(c))))));
     }
 
     // Befehle
@@ -215,6 +243,86 @@ final class Befehle {
         auffrischen.spieler(spieler);
         info(c, gruppe == null ? "Testansicht beendet." : "Du siehst die Welt jetzt wie die Gruppe „" + gruppe + "“.");
         return Command.SINGLE_SUCCESS;
+    }
+
+    private int markieren(CommandContext<CommandSourceStack> c, Ziel ziel, boolean hinzufuegen) {
+        if (ziel == null) {
+            return 0;
+        }
+        var name = c.getArgument("kennzeichen", String.class);
+        if (hinzufuegen && !Regelwerk.gueltigerName(name)) {
+            return fehler(c, "Ungültiges Kennzeichen. Erlaubt sind a-z, 0-9, _ und -, höchstens 32 Zeichen.");
+        }
+        var vorher = Kennzeichen.lesen(ziel.halter());
+        if (vorher == null) {
+            return fehler(c, ziel.name() + ": Die gespeicherten Kennzeichen sind beschädigt, nichts geändert.");
+        }
+        if (vorher.contains(name) == hinzufuegen) {
+            return fehler(c, ziel.name() + " hat „" + name + "“ " + (hinzufuegen ? "schon." : "nicht."));
+        }
+        var neu = new TreeSet<>(vorher);
+        if (hinzufuegen) {
+            neu.add(name);
+        } else {
+            neu.remove(name);
+        }
+        Kennzeichen.schreiben(ziel.halter(), new ArrayList<>(neu));
+        ziel.speichern().run();
+        c.getSource().getSender().sendMessage(Component.text(
+                "Kennzeichen „" + name + "“ " + (hinzufuegen ? "hinzugefügt: " : "entfernt: ") + ziel.name(),
+                NamedTextColor.GREEN));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private int kennzeichenZeigen(CommandContext<CommandSourceStack> c, Ziel ziel) {
+        if (ziel == null) {
+            return 0;
+        }
+        var kz = Kennzeichen.lesen(ziel.halter());
+        if (kz == null) {
+            return fehler(c, ziel.name() + ": Die gespeicherten Kennzeichen sind beschädigt.");
+        }
+        var lesbar = sichten.regelwerk().gruppen().values().stream()
+                .filter(g -> g.regel(ziel.art()).erlaubt(kz)).map(Gruppe::name).collect(Collectors.joining(", "));
+        info(c, ziel.name());
+        info(c, "Kennzeichen: " + (kz.isEmpty() ? "keine" : String.join(", ", new TreeSet<>(kz))));
+        info(c, "Lesbar für die Gruppen: " + (lesbar.isEmpty() ? "keine" : lesbar));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    // Ziele
+
+    /** Ohne Angabe: angeschautes Schild. Buch in der Haupthand und angeschaute Entity kommen später davor. */
+    private Ziel automatisch(CommandContext<CommandSourceStack> c) {
+        if (!(c.getSource().getSender() instanceof Player spieler)) {
+            fehler(c, "Von der Konsole bitte ein Ziel angeben, z. B. „schild <x y z>“.");
+            return null;
+        }
+        var block = spieler.getTargetBlockExact(6);
+        if (block == null) {
+            fehler(c, "Du schaust auf kein Schild (höchstens 6 Blöcke entfernt).");
+            return null;
+        }
+        return schild(c, block);
+    }
+
+    private static Block schildAn(CommandContext<CommandSourceStack> c) throws CommandSyntaxException {
+        var pos = c.getArgument("position", BlockPositionResolver.class).resolve(c.getSource());
+        return c.getSource().getLocation().getWorld().getBlockAt(pos.blockX(), pos.blockY(), pos.blockZ());
+    }
+
+    private Ziel schild(CommandContext<CommandSourceStack> c, Block block) {
+        var ort = block.getX() + " " + block.getY() + " " + block.getZ() + " (" + block.getWorld().getName() + ")";
+        if (!(block.getState() instanceof Sign schild)) {
+            fehler(c, "Bei " + ort + " steht kein Schild.");
+            return null;
+        }
+        // update() schreibt die Kopie zurück und schickt das Schild am Tickende an alle, die den Chunk haben.
+        // Der Zwischenspeicher muss vorher stimmen.
+        return new Ziel(Art.SCHILDER, "Schild bei " + ort, schild, () -> {
+            schild.update();
+            kennzeichen.nachlesen(block);
+        });
     }
 
     // Hilfen

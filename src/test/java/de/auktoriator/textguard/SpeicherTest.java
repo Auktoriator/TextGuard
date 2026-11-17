@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -47,5 +48,15 @@ class SpeicherTest {
             assertThrows(IllegalArgumentException.class, speicher::laden, kaputt);
         }
         assertTrue(Files.readString(datei).contains("GROSS"), "Laden verändert die Datei nicht");
+    }
+
+    @Test
+    void geheimnisWirdAngelegtUndDanachGelesen() throws IOException {
+        var datei = ordner.resolve("TextGuard/geheimnis");
+        var erstes = Speicher.geheimnis(datei);
+        assertEquals(32, erstes.length);
+        assertArrayEquals(erstes, Speicher.geheimnis(datei));
+        assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(datei)));
+        assertEquals(1, Files.list(datei.getParent()).count(), "keine Temp-Datei übrig");
     }
 }
