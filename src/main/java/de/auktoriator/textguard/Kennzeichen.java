@@ -7,6 +7,7 @@ import com.github.retrooper.packetevents.protocol.entity.data.EntityData;
 import com.github.retrooper.packetevents.protocol.entity.data.EntityDataTypes;
 import com.github.retrooper.packetevents.util.Vector3i;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityMetadata;
+import io.papermc.paper.persistence.PersistentDataContainerView;
 import java.util.Optional;
 import java.util.Collection;
 import java.util.HashMap;
@@ -23,6 +24,7 @@ import org.bukkit.Tag;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.Sign;
+import org.bukkit.block.TileState;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -33,14 +35,15 @@ import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.world.ChunkUnloadEvent;
-import org.bukkit.persistence.PersistentDataHolder;
+import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
 
 /**
  * Kennzeichen an Schildern und Entities. Sie stehen im PDC. Paper schickt das PDC nicht an den Client, und der
  * Paketlauscher darf nicht auf die Welt zugreifen, deshalb gibt es Zwischenspeicher: pro geladenem Chunk für Schilder,
- * pro Entity-ID für Entities mit Kennzeichen.
+ * pro Entity-ID für Entities mit Kennzeichen. Bei Büchern reist das PDC im custom_data des Items mit, der Lauscher liest
+ * es direkt aus dem Paket.
  */
 final class Kennzeichen implements Listener {
 
@@ -103,7 +106,7 @@ final class Kennzeichen implements Listener {
             spielerIds.add(entity.getEntityId());
             return;
         }
-        var kz = lesen(entity);
+        var kz = lesen(entity.getPersistentDataContainer());
         if (kz == null) {
             plugin.getLogger().warning("Kennzeichen an " + entity.getType().key().value() + " " + entity.getUniqueId()
                     + " nicht lesbar, der Name bleibt für alle mit Einschränkungen verschleiert.");
@@ -150,17 +153,15 @@ final class Kennzeichen implements Listener {
     }
 
     /** null, wenn der Eintrag kaputt ist. Das Objekt gilt dann als gesperrt. */
-    static Set<String> lesen(PersistentDataHolder halter) {
+    static Set<String> lesen(PersistentDataContainerView pdc) {
         try {
-            return Set.copyOf(halter.getPersistentDataContainer()
-                    .getOrDefault(SCHLUESSEL, PersistentDataType.LIST.strings(), List.of()));
+            return Set.copyOf(pdc.getOrDefault(SCHLUESSEL, PersistentDataType.LIST.strings(), List.of()));
         } catch (IllegalArgumentException e) {
             return null;
         }
     }
 
-    static void schreiben(PersistentDataHolder halter, Collection<String> kennzeichen) {
-        var pdc = halter.getPersistentDataContainer();
+    static void schreiben(PersistentDataContainer pdc, Collection<String> kennzeichen) {
         if (kennzeichen.isEmpty()) {
             pdc.remove(SCHLUESSEL);
         } else {
@@ -179,7 +180,7 @@ final class Kennzeichen implements Listener {
     void durchsehen(Chunk chunk) {
         var schilder = new HashMap<Vector3i, Set<String>>();
         for (var zustand : chunk.getTileEntities(b -> Tag.ALL_SIGNS.isTagged(b.getType()), false)) {
-            var kennzeichen = zustand instanceof Sign schild ? lesen(schild) : null;
+            var kennzeichen = zustand instanceof Sign schild ? lesen(schild.getPersistentDataContainer()) : null;
             if (kennzeichen != null) {
                 schilder.put(new Vector3i(zustand.getX(), zustand.getY(), zustand.getZ()), kennzeichen);
             } else {
@@ -197,7 +198,7 @@ final class Kennzeichen implements Listener {
             return;
         }
         var pos = new Vector3i(block.getX(), block.getY(), block.getZ());
-        var kennzeichen = block.getState(false) instanceof Sign schild ? lesen(schild) : null;
+        var kennzeichen = block.getState(false) instanceof Sign schild ? lesen(schild.getPersistentDataContainer()) : null;
         chunks.computeIfPresent(new ChunkOrt(welt.getUID(), Chunk.getChunkKey(pos.x >> 4, pos.z >> 4)), (ort, alt) -> {
             var neu = new HashMap<>(alt);
             if (kennzeichen != null) {
@@ -223,12 +224,13 @@ final class Kennzeichen implements Listener {
                 .forEach(pos -> senden(spieler, welt.getBlockAt(pos.x, pos.y, pos.z)));
     }
 
+    /** Schickt das Blockentity (Schild, Regal, …) an den Spieler. Der Lauscher verschleiert passend. */
     void senden(Player spieler, Block block) {
-        if (block.getState() instanceof Sign schild) {
+        if (block.getState() instanceof TileState zustand) {
             // Kopie: Auf diesem Weg ließe Paper das PDC (unsere Kennzeichen) im Paket stehen.
-            var pdc = schild.getPersistentDataContainer();
+            var pdc = zustand.getPersistentDataContainer();
             pdc.getKeys().forEach(pdc::remove);
-            spieler.sendBlockUpdate(block.getLocation(), schild);
+            spieler.sendBlockUpdate(block.getLocation(), zustand);
         }
     }
 
