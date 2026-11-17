@@ -1,0 +1,14 @@
+name: TextGuard
+version: '${version}'
+main: de.auktoriator.textguard.TextGuard
+api-version: '26.3'
+depend: [packetevents]
+description: Legt pro Spielergruppe fest, welche Texte (Schilder, Bücher, Mob-Namen) lesbar sind.
+authors: [Auktoriator]
+permissions:
+  textguard.admin:
+    description: Darf die TextGuard-Befehle verwenden (zusätzlich zu OP Stufe 4).
+    default: false
+  textguard.bypass:
+    description: Sieht immer alle Texte unverschleiert (zusätzlich zu OP Stufe 4).
+    default: false
