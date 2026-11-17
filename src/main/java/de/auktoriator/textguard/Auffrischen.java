@@ -10,10 +10,12 @@ import org.bukkit.entity.Player;
 public final class Auffrischen {
 
     private final Sichten sichten;
+    private final Kennzeichen kennzeichen;
     private final Map<UUID, Boolean> admins = new ConcurrentHashMap<>();
 
-    public Auffrischen(Sichten sichten) {
+    Auffrischen(Sichten sichten, Kennzeichen kennzeichen) {
         this.sichten = sichten;
+        this.kennzeichen = kennzeichen;
     }
 
     /** Berechnet die Sichten aller Online-Spieler neu, bei nurGeaenderte nur diese auffrischen. */
@@ -29,7 +31,8 @@ public final class Auffrischen {
 
     public void spieler(Player spieler) {
         adminAbgleichen(spieler);
-        // Hier ergänzen spätere Schritte das Nachsenden von Schildern, Entities und Inventar.
+        kennzeichen.nachsenden(spieler);
+        // Hier ergänzen spätere Schritte das Nachsenden von Entities und Inventar.
     }
 
     public void entfernen(UUID spieler) {
