@@ -14,7 +14,6 @@ import io.papermc.paper.command.brigadier.argument.ArgumentTypes;
 import io.papermc.paper.command.brigadier.argument.resolvers.BlockPositionResolver;
 import io.papermc.paper.command.brigadier.argument.resolvers.PlayerProfileListResolver;
 import io.papermc.paper.command.brigadier.argument.resolvers.selector.EntitySelectorArgumentResolver;
-import io.papermc.paper.persistence.PersistentDataContainerView;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -22,25 +21,17 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
-import java.util.function.Consumer;
 import java.util.function.ToIntBiFunction;
 import java.util.stream.Collectors;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
-import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
-import org.bukkit.Material;
 import org.bukkit.block.Block;
-import org.bukkit.block.Sign;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 
 /** Brigadier-Baum für /textguard (Alias /tg). */
 final class Befehle {
-
-    /** Objekt, dessen Kennzeichen ein Befehl liest oder ändert. schreiben speichert neue Kennzeichen und sendet nach. */
-    private record Ziel(Art art, String name, PersistentDataContainerView pdc, Consumer<List<String>> schreiben) {
-    }
 
     private final TextGuard plugin;
     private final Sichten sichten;
@@ -94,6 +85,8 @@ final class Befehle {
                 .then(Commands.literal("ansicht")
                         .then(Commands.literal("aus").executes(c -> ansicht(c, null)))
                         .then(gruppeArg().executes(c -> ansicht(c, gruppenName(c)))))
+                .then(Commands.literal("werkzeug").executes(c -> werkzeug(c, null))
+                        .then(kennzeichenArg(null).executes(c -> werkzeug(c, c.getArgument("kennzeichen", String.class)))))
                 .then(Commands.literal("neuladen").executes(c -> {
                     plugin.neuladen(c.getSource().getSender());
                     return Command.SINGLE_SUCCESS;
@@ -118,15 +111,14 @@ final class Befehle {
     /** Mit Art nur die Ausnahmen dieser Regel der Gruppe im Befehl, sonst alle Kennzeichen aus den Regeln. */
     private RequiredArgumentBuilder<CommandSourceStack, String> kennzeichenArg(Art art) {
         return Commands.argument("kennzeichen", StringArgumentType.word()).suggests((c, b) -> {
-            var gruppen = sichten.regelwerk().gruppen();
             var vorschlaege = new TreeSet<String>();
             if (art != null) {
-                var gruppe = gruppen.get(c.getArgument("gruppe", String.class));
+                var gruppe = sichten.regelwerk().gruppen().get(c.getArgument("gruppe", String.class));
                 if (gruppe != null) {
                     vorschlaege.addAll(gruppe.regel(art).ausnahmen());
                 }
             } else {
-                gruppen.values().forEach(g -> g.regeln().values().forEach(r -> vorschlaege.addAll(r.ausnahmen())));
+                vorschlaege.addAll(sichten.regelwerk().kennzeichen());
             }
             vorschlaege.stream().filter(n -> n.startsWith(b.getRemainingLowerCase())).forEach(b::suggest);
             return b.buildFuture();
@@ -283,7 +275,7 @@ final class Befehle {
         var erledigt = new ArrayList<Ziel>();
         var fehler = new ArrayList<String>();
         for (var ziel : ziele) {
-            var problem = aendern(ziel, name, hinzufuegen);
+            var problem = ziel.aendern(name, hinzufuegen);
             if (problem == null) {
                 erledigt.add(ziel);
             } else {
@@ -303,25 +295,6 @@ final class Befehle {
         return Command.SINGLE_SUCCESS;
     }
 
-    /** Ändert das Kennzeichen eines Ziels. Gibt den Grund zurück, wenn nichts geändert wurde, sonst null. */
-    private static String aendern(Ziel ziel, String name, boolean hinzufuegen) {
-        var vorher = Kennzeichen.lesen(ziel.pdc());
-        if (vorher == null) {
-            return ziel.name() + ": Die gespeicherten Kennzeichen sind beschädigt, nichts geändert.";
-        }
-        if (vorher.contains(name) == hinzufuegen) {
-            return ziel.name() + " hat „" + name + "“ " + (hinzufuegen ? "schon." : "nicht.");
-        }
-        var neu = new TreeSet<>(vorher);
-        if (hinzufuegen) {
-            neu.add(name);
-        } else {
-            neu.remove(name);
-        }
-        ziel.schreiben().accept(new ArrayList<>(neu));
-        return null;
-    }
-
     private int kennzeichenZeigen(CommandContext<CommandSourceStack> c, Ziel ziel) {
         if (ziel == null) {
             return 0;
@@ -330,11 +303,32 @@ final class Befehle {
         if (kz == null) {
             return fehler(c, ziel.name() + ": Die gespeicherten Kennzeichen sind beschädigt.");
         }
-        var lesbar = sichten.regelwerk().gruppen().values().stream()
-                .filter(g -> g.regel(ziel.art()).erlaubt(kz)).map(Gruppe::name).collect(Collectors.joining(", "));
         info(c, ziel.name());
         info(c, "Kennzeichen: " + (kz.isEmpty() ? "keine" : String.join(", ", new TreeSet<>(kz))));
-        info(c, "Lesbar für die Gruppen: " + (lesbar.isEmpty() ? "keine" : lesbar));
+        info(c, "Lesbar für die Gruppen: " + ziel.lesbarFuer(sichten.regelwerk()));
+        return Command.SINGLE_SUCCESS;
+    }
+
+    /** Gibt das Werkzeug. Hält der Spieler es schon, wird nur das Kennzeichen gewählt. */
+    private int werkzeug(CommandContext<CommandSourceStack> c, String kz) {
+        if (!(c.getSource().getSender() instanceof Player spieler)) {
+            return fehler(c, "Das Werkzeug gibt es nur für Spieler.");
+        }
+        if (kz != null && !Regelwerk.gueltigerName(kz)) {
+            return fehler(c, "Ungültiges Kennzeichen. Erlaubt sind a-z, 0-9, _ und -, höchstens 32 Zeichen.");
+        }
+        var hand = spieler.getInventory().getItemInMainHand();
+        if (Werkzeug.istWerkzeug(hand)) {
+            if (kz != null) {
+                Werkzeug.waehlen(hand, kz);
+            }
+        } else if (!spieler.getInventory().addItem(Werkzeug.neu(kz)).isEmpty()) {
+            return fehler(c, "Dein Inventar ist voll.");
+        }
+        c.getSource().getSender().sendMessage(Component.text("TextGuard-Werkzeug"
+                + (kz == null ? "" : " mit Kennzeichen „" + kz + "“")
+                + ": Linksklick wählt das Kennzeichen, Rechtsklick auf Schild oder Mob schaltet es um.",
+                NamedTextColor.GREEN));
         return Command.SINGLE_SUCCESS;
     }
 
@@ -346,7 +340,7 @@ final class Befehle {
             fehler(c, "Von der Konsole bitte ein Ziel angeben: „schild <x y z>“, „entities <selektor>“ oder „entity <selektor>“.");
             return null;
         }
-        var buch = buch(spieler);
+        var buch = Ziel.buch(spieler);
         if (buch != null) {
             return buch;
         }
@@ -377,45 +371,15 @@ final class Befehle {
     }
 
     private Ziel entityZiel(Entity entity) {
-        var name = entity.customName();
-        var beschreibung = entity.getType().key().value() + (name == null ? ""
-                : " „" + PlainTextComponentSerializer.plainText().serialize(name) + "“");
-        return new Ziel(Art.MOBNAMEN, beschreibung, entity.getPersistentDataContainer(), kz -> {
-            Kennzeichen.schreiben(entity.getPersistentDataContainer(), kz);
-            kennzeichen.entityNachlesen(entity);
-            kennzeichen.nameSenden(entity);
-        });
+        return Ziel.entity(entity, kennzeichen);
     }
 
     private Ziel schild(CommandContext<CommandSourceStack> c, Block block) {
-        var ort = block.getX() + " " + block.getY() + " " + block.getZ() + " (" + block.getWorld().getName() + ")";
-        if (!(block.getState() instanceof Sign schild)) {
-            fehler(c, "Bei " + ort + " steht kein Schild.");
-            return null;
+        var ziel = Ziel.schild(block, kennzeichen);
+        if (ziel == null) {
+            fehler(c, "Bei " + Ziel.ort(block) + " steht kein Schild.");
         }
-        // update() schreibt die Kopie zurück und schickt das Schild am Tickende an alle, die den Chunk haben.
-        // Der Zwischenspeicher muss vorher stimmen.
-        var pdc = schild.getPersistentDataContainer();
-        return new Ziel(Art.SCHILDER, "Schild bei " + ort, pdc, kz -> {
-            Kennzeichen.schreiben(pdc, kz);
-            schild.update();
-            kennzeichen.nachlesen(block);
-        });
-    }
-
-    /** Signiertes Buch oder Buch und Feder in der Haupthand, sonst null. */
-    private static Ziel buch(Player spieler) {
-        // Ein Spiegel: Änderungen landen direkt im Inventar.
-        var item = spieler.getInventory().getItemInMainHand();
-        if (item.getType() != Material.WRITTEN_BOOK && item.getType() != Material.WRITABLE_BOOK) {
-            return null;
-        }
-        var name = "Buch „" + PlainTextComponentSerializer.plainText().serialize(item.effectiveName()) + "“ in der Hand";
-        // Direkt ins custom_data statt über editMeta: BookMeta kennt keine gefilterten Seiten und würde sie verlieren.
-        return new Ziel(Art.BUECHER, name, item.getPersistentDataContainer(), kz -> {
-            item.editPersistentDataContainer(pdc -> Kennzeichen.schreiben(pdc, kz));
-            spieler.updateInventory();
-        });
+        return ziel;
     }
 
     // Hilfen
