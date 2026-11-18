@@ -21,8 +21,8 @@ Paper-Plugin für Minecraft Java 26.3, das pro Spielergruppe festlegt, welche Te
 
 ## Installation aus dem Release
 
-1. `TextGuard-1.0.0.jar` von https://github.com/Auktoriator/TextGuard/releases herunterladen.
-2. Die SHA-256-Prüfsumme aus dem Release mit `shasum -a 256 TextGuard-1.0.0.jar` vergleichen.
+1. `TextGuard-1.1.0.jar` von https://github.com/Auktoriator/TextGuard/releases herunterladen.
+2. Die SHA-256-Prüfsumme aus dem Release mit `shasum -a 256 TextGuard-1.1.0.jar` vergleichen.
 3. Jar in den Ordner `plugins/` legen (zusammen mit PacketEvents) und den Server neu starten.
 
 ## Rechte
@@ -108,7 +108,7 @@ Wer einen Text nur als Runen sieht, könnte ihn beim Speichern versehentlich üb
 
 ## Stand
 
-Version 1.0.0, am 17.11.2026 mit echtem Client auf Paper 26.3 geprüft.
+Version 1.1.0. Version 1.0.0 wurde am 17.11.2026 mit echtem Client auf Paper 26.3 geprüft, das Werkzeug noch nicht: https://github.com/Auktoriator/TextGuard/issues/17
 
 ## Lizenz
 
