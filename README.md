@@ -68,6 +68,7 @@ Alle Befehle beginnen mit `/textguard` (Alias `/tg`) und brauchen das Admin-Rech
 /textguard kennzeichen zeigen [schild <x y z> | entity <selektor>]
 /textguard ansicht <gruppe>
 /textguard ansicht aus
+/textguard werkzeug [kennzeichen]
 /textguard neuladen
 ```
 
@@ -75,7 +76,18 @@ Alle Befehle beginnen mit `/textguard` (Alias `/tg`) und brauchen das Admin-Rech
 - `gruppe zeigen`: zeigt Mitglieder, Spieler mit Gruppenrecht (online) und die Regeln.
 - `kennzeichen`: Ohne Ziel gilt, was du benutzt oder anschaust. Zuerst zählt ein Buch in der Haupthand, danach eine Entity bis 6 Blöcke entfernt (keine Spieler), danach ein Schild bis 6 Blöcke entfernt. `schild <x y z>` nimmt ein bestimmtes Schild (auch von der Konsole), `entities <selektor>` mehrere Mobs (Spieler werden übersprungen), `entity <selektor>` einen Mob.
 - `ansicht <gruppe>`: Du siehst die Welt so, wie die Gruppe sie sieht. Nur für Spieler. `ansicht aus` beendet die Testansicht.
+- `werkzeug [kennzeichen]`: Gibt dir das TextGuard-Werkzeug (siehe unten). Hältst du es schon, wird nur das Kennzeichen gewählt.
 - `neuladen`: Lädt die Gruppen neu. Schlägt das fehl, bleiben die alten Regeln.
+
+## Werkzeug
+
+Mit dem Werkzeug setzt du Kennzeichen an Schildern und Mobs per Klick, ähnlich wie mit dem Debug-Stick. Es ist eine Diamanthacke namens „TextGuard-Werkzeug“, die du mit `/textguard werkzeug` bekommst. Normale Diamanthacken bleiben normal.
+
+- **Linksklick**: wählt das nächste Kennzeichen. Zur Auswahl stehen alle Kennzeichen, die in einer Regel als Ausnahme vorkommen. Ein anderes wählst du mit `/textguard werkzeug <kennzeichen>`.
+- **Rechtsklick auf ein Schild oder einen Mob**: setzt das gewählte Kennzeichen oder entfernt es.
+- Die Actionbar zeigt danach, ob das Kennzeichen gesetzt ist (✔) oder nicht (✘), und welche Gruppen das Objekt lesen dürfen.
+
+Mit dem Werkzeug in der Hand öffnet sich kein Schild-Editor, nichts wird abgebaut und kein Mob verletzt. Das gilt nur für Admins, bei allen anderen ist es eine normale Hacke. Bücher bekommen ihr Kennzeichen weiter per Befehl (Buch in die Haupthand, dann `/textguard kennzeichen …`).
 
 ## Schutz vor Datenverlust
 

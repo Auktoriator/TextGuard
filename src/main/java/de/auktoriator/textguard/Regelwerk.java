@@ -5,7 +5,9 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.SortedSet;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -25,6 +27,13 @@ public record Regelwerk(Map<String, Gruppe> gruppen) {
     /** Gilt für Gruppennamen und Kennzeichen. */
     public static boolean gueltigerName(String name) {
         return NAME.matcher(name).matches();
+    }
+
+    /** Alle Kennzeichen, die in einer Regel als Ausnahme vorkommen, sortiert. */
+    public SortedSet<String> kennzeichen() {
+        var alle = new TreeSet<String>();
+        gruppen.values().forEach(g -> g.regeln().values().forEach(r -> alle.addAll(r.ausnahmen())));
+        return alle;
     }
 
     public Regelwerk mitGruppe(Gruppe gruppe) {
